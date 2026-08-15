@@ -1,8 +1,10 @@
 ﻿# ============================================================
 #  DSH 自动启动器 — 主脚本
 #
-#  功能：自动获取 DSH(DeepSeek Harness) 的地址，
-#        然后用浏览器打开 DSH Web 界面。
+#  功能：
+#    1) 自动获取 DSH(DeepSeek Harness) 的地址
+#    2) 若 DSH web 未运行，自动运行 dsh web 把服务拉起来
+#    3) 然后用浏览器打开 DSH Web 界面
 #
 #  浏览器策略（-Browser 参数）：
 #    auto    （默认）优先使用夸克浏览器，找不到就使用系统默认浏览器
@@ -13,6 +15,7 @@
 #    powershell -ExecutionPolicy Bypass -File open-dsh.ps1
 #    powershell -ExecutionPolicy Bypass -File open-dsh.ps1 -Browser default
 #    powershell -ExecutionPolicy Bypass -File open-dsh.ps1 -Url http://localhost:3080/ -DryRun
+#    powershell -ExecutionPolicy Bypass -File open-dsh.ps1 -NoAutoStart    # 不自动启动 dsh web
 #
 #  日常使用请双击“启动DSH.vbs”（无窗口）；需要看详细输出时用 启动DSH.bat 前台调试。
 # ============================================================
@@ -21,7 +24,8 @@ param(
     [ValidateSet('auto', 'default', 'quark')]
     [string]$Browser = 'auto',
     [switch]$DryRun,
-    [switch]$Log
+    [switch]$Log,
+    [switch]$NoAutoStart
 )
 
 $ErrorActionPreference = 'Continue'
@@ -40,36 +44,95 @@ function Write-Step($text) { Write-Host $text -ForegroundColor Yellow; LogWrite 
 function Write-Ok($text)   { Write-Host "      $text" -ForegroundColor Green; LogWrite "OK: $text" }
 function Write-Warn($text) { Write-Host "      $text" -ForegroundColor DarkYellow; LogWrite "WARN: $text" }
 
-LogWrite "=== 开始 (Url=$DSH_URL, Browser=$Browser) ==="
+# ---------------- 工具函数 ----------------
+function Test-PortListen($port) {
+    return [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+}
+function Wait-Port($port, $maxSeconds) {
+    for ($i = 0; $i -lt $maxSeconds; $i++) {
+        if (Test-PortListen $port) { return $true }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+function Find-DshCommand {
+    # 优先使用 dsh.cmd（cmd 脚本，Start-Process 可直接启动；dsh.ps1 不能直接 Start-Process）
+    $c1 = Join-Path $env:APPDATA 'npm\dsh.cmd'
+    if (Test-Path -LiteralPath $c1) { return $c1 }
+    $c = Get-Command dsh.cmd -ErrorAction SilentlyContinue
+    if ($c -and $c.Source) { return $c.Source }
+    $c2 = Get-Command dsh -ErrorAction SilentlyContinue
+    if ($c2 -and $c2.Source -and $c2.Source -like '*.cmd') { return $c2.Source }
+    try {
+        $prefix = (& npm.cmd prefix -g 2>$null | Select-Object -Last 1)
+        if ($prefix) {
+            $c3 = Join-Path $prefix 'dsh.cmd'
+            if (Test-Path -LiteralPath $c3) { return $c3 }
+        }
+    } catch { }
+    return $null
+}
+
+LogWrite "=== 开始 (Url=$DSH_URL, Browser=$Browser, NoAutoStart=$NoAutoStart) ==="
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "              DSH 自动启动器" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ---------------- 第 1 步：获取 DSH 地址 ----------------
+# ---------------- 第 1 步：获取 DSH 地址并确保服务运行 ----------------
 Write-Step "[1/4] 正在获取 DSH 地址 ..."
 
-# 从地址解析端口（支持自定义 -Url 端口）
-$port = ([uri]$DSH_URL).Port
+# 从地址解析端口和主机（支持自定义 -Url）
+$uriObj = [uri]$DSH_URL
+$port = $uriObj.Port
 if ($port -le 0) { $port = if ($DSH_URL -like 'https*') { 443 } else { 80 } }
+$hostName = $uriObj.Host
 
-$portListening = $false
-try {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop
-    if ($conn) { $portListening = $true }
-} catch { }
-if ($portListening) {
-    Write-Ok "端口 $port 正在监听，DSH 服务已启动。"
+if (Test-PortListen $port) {
+    Write-Ok "端口 $port 正在监听，DSH web 已运行。"
 } else {
-    Write-Warn "端口 $port 未检测到监听，DSH 可能尚未启动（仍将尝试打开）。"
+    if ($NoAutoStart) {
+        Write-Warn "端口 $port 未监听（已跳过自动启动），请先手动运行 dsh web。"
+    } else {
+        Write-Warn "端口 $port 未监听，DSH web 尚未运行，尝试自动启动 ..."
+        $dsh = Find-DshCommand
+        if ($dsh) {
+            $dshArgs = @('web')
+            if ($port -ne 3080) { $dshArgs += @('--port', "$port") }
+            $isLocal = ($hostName -eq 'localhost' -or $hostName -eq '127.0.0.1' -or $hostName -eq '::1')
+            if (-not $isLocal) { $dshArgs += @('--host', $hostName) }
+            if ($DryRun) {
+                Write-Ok "[演示模式] 将执行: $dsh $($dshArgs -join ' ')"
+            } else {
+                try {
+                    Start-Process -FilePath $dsh -ArgumentList $dshArgs -WindowStyle Hidden -WorkingDirectory $PSScriptRoot | Out-Null
+                    Write-Ok "已启动 dsh web，等待端口 $port 就绪（最多 60 秒）..."
+                    if (Wait-Port $port 60) {
+                        Write-Ok "DSH web 启动成功。"
+                    } else {
+                        Write-Warn "等待超时：DSH web 未能就绪，请手动运行 dsh web 排查（日志见 launcher.log）。"
+                    }
+                } catch {
+                    Write-Warn "自动启动 dsh web 失败: $($_.Exception.Message)"
+                }
+            }
+        } else {
+            Write-Warn "找不到 dsh 命令，无法自动启动。请先安装 DSH，或手动运行 dsh web。"
+        }
+    }
 }
 
-try {
-    $resp = Invoke-WebRequest -Uri $DSH_URL -UseBasicParsing -TimeoutSec 3
-    Write-Ok "HTTP 请求成功，状态码: $($resp.StatusCode)"
-} catch {
-    Write-Warn "HTTP 请求暂时无响应（服务可能还在启动中）。"
+# HTTP 探测（端口就绪时才有意义）
+if (Test-PortListen $port) {
+    try {
+        $resp = Invoke-WebRequest -Uri $DSH_URL -UseBasicParsing -TimeoutSec 3
+        Write-Ok "HTTP 请求成功，状态码: $($resp.StatusCode)"
+    } catch {
+        Write-Warn "HTTP 请求暂时无响应（服务可能还在启动中）。"
+    }
+} else {
+    Write-Warn "端口 $port 仍未监听，浏览器打开后可能连接被拒绝。请确认 dsh web 已启动。"
 }
 
 $addr = @($DSH_URL)
