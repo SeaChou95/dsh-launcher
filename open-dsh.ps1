@@ -97,17 +97,29 @@ if (Test-PortListen $port) {
     } else {
         Write-Warn "端口 $port 未监听，DSH web 尚未运行，尝试自动启动 ..."
         $dsh = Find-DshCommand
-        if ($dsh) {
-            $dshArgs = @('web')
-            if ($port -ne 3080) { $dshArgs += @('--port', "$port") }
+        # 优先用 node 直接跑 bin.js（node 是控制台程序，-WindowStyle Hidden 能彻底隐藏窗口；
+        # 而 dsh.cmd 是批处理脚本，隐藏不彻底会闪出黑窗口）
+        $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+        $binJs = Join-Path $env:APPDATA 'npm\node_modules\@deepseek-ai\dsh\lib\bin.js'
+        $launchFile = $null
+        $launchArgs = @()
+        if ($node -and (Test-Path -LiteralPath $binJs)) {
+            $launchFile = $node
+            $launchArgs = @($binJs, 'web')
+        } elseif ($dsh) {
+            $launchFile = $dsh
+            $launchArgs = @('web')
+        }
+        if ($launchFile) {
+            if ($port -ne 3080) { $launchArgs += @('--port', "$port") }
             $isLocal = ($hostName -eq 'localhost' -or $hostName -eq '127.0.0.1' -or $hostName -eq '::1')
-            if (-not $isLocal) { $dshArgs += @('--host', $hostName) }
+            if (-not $isLocal) { $launchArgs += @('--host', $hostName) }
             if ($DryRun) {
-                Write-Ok "[演示模式] 将执行: $dsh $($dshArgs -join ' ')"
+                Write-Ok "[演示模式] 将执行: $launchFile $($launchArgs -join ' ')"
             } else {
                 try {
-                    Start-Process -FilePath $dsh -ArgumentList $dshArgs -WindowStyle Hidden -WorkingDirectory $PSScriptRoot | Out-Null
-                    Write-Ok "已启动 dsh web，等待端口 $port 就绪（最多 60 秒）..."
+                    Start-Process -FilePath $launchFile -ArgumentList $launchArgs -WindowStyle Hidden -WorkingDirectory $PSScriptRoot | Out-Null
+                    Write-Ok "已启动 dsh web（后台隐藏，无窗口），等待端口 $port 就绪（最多 60 秒）..."
                     if (Wait-Port $port 60) {
                         Write-Ok "DSH web 启动成功。"
                     } else {
@@ -118,7 +130,7 @@ if (Test-PortListen $port) {
                 }
             }
         } else {
-            Write-Warn "找不到 dsh 命令，无法自动启动。请先安装 DSH，或手动运行 dsh web。"
+            Write-Warn "找不到 node / dsh 命令，无法自动启动。请先安装 DSH，或手动运行 dsh web。"
         }
     }
 }
