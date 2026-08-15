@@ -6,6 +6,12 @@ Desktop.ini
 # PowerShell
 *.ps1.bak
 
+# Runtime log
+launcher.log
+
+# Machine-specific shortcut (absolute paths)
+*.lnk
+
 # Temp / build artifacts
 icon-build/
 tmp/
