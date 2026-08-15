@@ -73,6 +73,23 @@ function Find-DshCommand {
     return $null
 }
 
+function Start-DshWebHidden($file, $argList) {
+    # 用 ProcessStartInfo + CreateNoWindow 让子进程真正脱离当前控制台：
+    #   1) 子进程没有自己的控制台窗口（彻底无窗口）
+    #   2) 子进程不挂靠在启动器的控制台上，关闭启动器窗口不会连带杀死它
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $file
+    $quoted = @()
+    foreach ($a in $argList) { $quoted += '"' + ($a -replace '"', '\"') + '"' }
+    $psi.Arguments = ($quoted -join ' ')
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    # 工作目录用用户主目录，而不是启动器所在目录：
+    # dsh web 会把会话/报错文件写到进程工作目录，设成启动器目录会导致会话错乱
+    $psi.WorkingDirectory = $env:USERPROFILE
+    [System.Diagnostics.Process]::Start($psi) | Out-Null
+}
+
 LogWrite "=== 开始 (Url=$DSH_URL, Browser=$Browser, NoAutoStart=$NoAutoStart) ==="
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
@@ -118,7 +135,7 @@ if (Test-PortListen $port) {
                 Write-Ok "[演示模式] 将执行: $launchFile $($launchArgs -join ' ')"
             } else {
                 try {
-                    Start-Process -FilePath $launchFile -ArgumentList $launchArgs -WindowStyle Hidden -WorkingDirectory $PSScriptRoot | Out-Null
+                    Start-DshWebHidden $launchFile $launchArgs
                     Write-Ok "已启动 dsh web（后台隐藏，无窗口），等待端口 $port 就绪（最多 60 秒）..."
                     if (Wait-Port $port 60) {
                         Write-Ok "DSH web 启动成功。"

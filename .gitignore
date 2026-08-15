@@ -9,6 +9,10 @@ Desktop.ini
 # Runtime log
 launcher.log
 
+# DSH runtime artifacts (session journals / error dumps written into CWD)
+dsh-session-*/
+报错.txt
+
 # Machine-specific shortcut (absolute paths)
 *.lnk
 
