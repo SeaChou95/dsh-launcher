@@ -76,7 +76,8 @@
   `powershell -ExecutionPolicy Bypass -File open-dsh.ps1 -Url http://localhost:8080/`
 
 ### Q4：有黑色窗口一闪而过？
-- 用 `启动DSH.vbs` 启动是**完全没有窗口**的；`启动DSH.bat` 是调试用的，会显示窗口和详细文字
+- 用 `启动DSH.vbs` 或桌面快捷方式启动是**完全没有窗口**的——连自动拉起的 `dsh web` 服务也是后台隐藏运行（通过 `node` 直接启动，无控制台窗口）
+- `启动DSH.bat` 是调试专用的，会显示窗口和详细文字
 
 ---
 
